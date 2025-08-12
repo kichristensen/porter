@@ -707,7 +707,7 @@ func TestManifestConverter_generateDependenciesv2(t *testing.T) {
 				},
 			},
 			Sharing: depsv2ext.SharingCriteria{
-				Mode:  true,
+				Mode:  depsv2ext.SharingModeGroup,
 				Group: depsv2ext.SharingGroup{Name: "myapp"},
 			},
 			Parameters: map[string]string{

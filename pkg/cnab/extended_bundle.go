@@ -29,7 +29,7 @@ type ExtendedBundle struct {
 type DependencyLock struct {
 	Alias        string
 	Reference    string
-	SharingMode  bool
+	SharingMode  string
 	SharingGroup string
 }
 
@@ -252,7 +252,7 @@ func (b *ExtendedBundle) ResolveDependencies(bun ExtendedBundle) ([]DependencyLo
 		lock := DependencyLock{
 			Alias:       dep.Name,
 			Reference:   ref.String(),
-			SharingMode: false,
+			SharingMode: v2.SharingModeGroup,
 		}
 		q = append(q, lock)
 	}
@@ -262,19 +262,19 @@ func (b *ExtendedBundle) ResolveDependencies(bun ExtendedBundle) ([]DependencyLo
 
 // ResolveSharedDeps only works with depsv2
 func (b *ExtendedBundle) ResolveSharedDeps(bun ExtendedBundle) ([]DependencyLock, error) {
-	v2, err := bun.ReadDependenciesV2()
+	v2Deps, err := bun.ReadDependenciesV2()
 	if err != nil {
 		return nil, fmt.Errorf("error reading dependencies v2 for %s", bun.Name)
 	}
 
-	q := make([]DependencyLock, 0, len(v2.Requires))
-	for name, d := range v2.Requires {
+	q := make([]DependencyLock, 0, len(v2Deps.Requires))
+	for name, d := range v2Deps.Requires {
 		d.Name = name
 
-		if d.Sharing.Mode && d.Sharing.Group.Name == "" {
+		if d.Sharing.Mode == v2.SharingModeGroup && d.Sharing.Group.Name == "" {
 			return nil, fmt.Errorf("empty sharing group, sharing group name needs to be specified to be active")
 		}
-		if !d.Sharing.Mode && d.Sharing.Group.Name != "" {
+		if d.Sharing.Mode == v2.SharingModeGroup && d.Sharing.Group.Name != "" {
 			return nil, fmt.Errorf("empty sharing mode, sharing mode boolean set to `true` to be active")
 		}
 

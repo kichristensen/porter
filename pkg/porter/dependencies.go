@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"get.porter.sh/porter/pkg/cnab"
+	v2 "get.porter.sh/porter/pkg/cnab/extensions/dependencies/v2"
 	cnabprovider "get.porter.sh/porter/pkg/cnab/provider"
 	"get.porter.sh/porter/pkg/config"
 	"get.porter.sh/porter/pkg/manifest"
@@ -318,7 +319,7 @@ func (e *dependencyExecutioner) executeDependency(ctx context.Context, dep *queu
 	ctx, span := tracing.StartSpan(ctx)
 	defer span.EndSpan()
 
-	if dep.SharingMode {
+	if dep.SharingMode == v2.SharingModeGroup {
 		err := e.runDependencyv2(ctx, dep)
 		return err
 	}

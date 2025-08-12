@@ -497,7 +497,7 @@ func (c *ManifestConverter) generateDependenciesV2(ctx context.Context, defs *de
 			Bundle:  dep.Bundle.Reference,
 			Version: dep.Bundle.Version,
 			Sharing: depsv2ext.SharingCriteria{
-				Mode: dep.Sharing.GetEffectiveMode(),
+				Mode: dep.Sharing.Mode,
 				Group: depsv2ext.SharingGroup{
 					Name: dep.Sharing.Group.Name,
 				},

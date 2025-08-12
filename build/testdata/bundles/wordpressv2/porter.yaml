@@ -16,7 +16,7 @@ dependencies:
       bundle:
         reference: localhost:5000/mysql:v0.1.4
       sharing:
-        mode: true
+        mode: group
         group:
           name: myapp
       parameters:
