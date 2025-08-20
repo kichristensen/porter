@@ -645,6 +645,45 @@ func (p *Porter) finalizeParameters(ctx context.Context, installation storage.In
 }
 
 func (p *Porter) getUnconvertedValueFromRaw(b cnab.ExtendedBundle, def *definition.Schema, key, rawValue string) (string, error) {
+	// if definition type is object and the value looks like a path to a file
+	if def.Type == "object" && isFilePath(rawValue) {
+		// TODO: Create tests for all this
+
+		// check if the file is placed above the current directory
+		// this should not be allowed for security purposes
+		exist, err := p.FileSystem.Exists(rawValue)
+		if err != nil {
+			return "", fmt.Errorf("unable to check if file %s exists: %w", rawValue, err)
+		}
+		if !exist {
+			return "", fmt.Errorf("object parameter %s at %s does not exist", key, rawValue)
+		}
+		resolvedPath, err := filepath.EvalSymlinks(rawValue)
+		if err != nil {
+			return "", fmt.Errorf("unable to resolve symlinks for %s: %w", rawValue, err)
+		}
+		aboveCwd, err := p.checkFileNotAboveCwd(key, resolvedPath)
+		if err != nil {
+			return "", fmt.Errorf("unable to check if object parameter %s at %s is above the current directory: %w", key, resolvedPath, err)
+		}
+		if aboveCwd {
+			path := rawValue
+			if filepath.Clean(rawValue) != resolvedPath {
+				path = fmt.Sprintf("%s -> %s", rawValue, resolvedPath)
+			}
+			return "", fmt.Errorf("object parameter %s at %s is above the current directory and is not allowed", key, path)
+		}
+
+		// read the file
+		if _, err := p.FileSystem.Stat(resolvedPath); err == nil {
+			bytes, err := p.FileSystem.ReadFile(resolvedPath)
+			if err != nil {
+				return "", fmt.Errorf("unable to read object parameter %s at %s: %w", key, resolvedPath, err)
+			}
+			return string(bytes), nil
+		}
+	}
+
 	// the parameter value (via rawValue) may represent a file on the local filesystem
 	if b.IsFileType(def) {
 		if _, err := p.FileSystem.Stat(rawValue); err == nil {
@@ -656,6 +695,34 @@ func (p *Porter) getUnconvertedValueFromRaw(b cnab.ExtendedBundle, def *definiti
 		}
 	}
 	return rawValue, nil
+}
+
+func (p *Porter) checkFileNotAboveCwd(key, path string) (bool, error) {
+	// Check if the file is above the current working directory
+	cwd := p.FileSystem.Getwd()
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false, fmt.Errorf("unable to get absolute path for %s: %w", path, err)
+	}
+	rel, err := filepath.Rel(cwd, absPath)
+	if err != nil {
+		return false, fmt.Errorf("unable to determine relative path for %s: %w", absPath, err)
+	}
+	if strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
+		return true, nil
+	}
+	return false, nil
+}
+
+// isFilePath returns true if the string looks like a file path (absolute or relative).
+func isFilePath(path string) bool {
+	if path == "" {
+		return false
+	}
+	if filepath.IsAbs(path) || strings.HasPrefix(path, "."+string(filepath.Separator)) || strings.HasPrefix(path, ".."+string(filepath.Separator)) {
+		return true
+	}
+	return false
 }
 
 func (p *Porter) resolveParameterSources(ctx context.Context, bun cnab.ExtendedBundle, installation storage.Installation) (secrets.Set, error) {
