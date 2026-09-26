@@ -37,7 +37,7 @@ func TestWireJobParameters(t *testing.T) {
 	}
 
 	job := &storage.Job{}
-	err = wireJobParameters(job, dep, tg.g, depA, jobIDs)
+	err = wireJobParameters(job, dep, tg.g, depA, jobIDs, jobIDs[tg.g.Root])
 	require.NoError(t, err)
 
 	params := job.Installation.Parameters.Parameters
@@ -77,7 +77,7 @@ func TestWireJobCredentials(t *testing.T) {
 	}
 
 	job := &storage.Job{}
-	err = wireJobCredentials(job, d, tg.g, dep, jobIDs)
+	err = wireJobCredentials(job, d, tg.g, dep, jobIDs, jobIDs[tg.g.Root])
 	require.NoError(t, err)
 
 	require.Len(t, job.Credentials, 1)
@@ -111,7 +111,7 @@ func TestWireJobParameters_CompositeTemplate(t *testing.T) {
 	}}
 
 	job := &storage.Job{}
-	require.NoError(t, wireJobParameters(job, dep, tg.g, depA, jobIDs))
+	require.NoError(t, wireJobParameters(job, dep, tg.g, depA, jobIDs, jobIDs[tg.g.Root]))
 
 	params := job.Installation.Parameters.Parameters
 	require.Len(t, params, 1)
@@ -133,6 +133,8 @@ func TestWireJobParameters_CompositeTemplateErrors(t *testing.T) {
 		"root output (never resolvable)":       "x-${bundle.outputs.x}",
 		"unknown sibling":                      "x-${bundle.dependencies.nope.outputs.host}",
 		"a dependency's parameter, not output": "x-${bundle.dependencies.b.parameters.p}",
+		"whole ref, unknown sibling":           "${bundle.dependencies.nope.outputs.host}",
+		"whole ref, dependency parameter":      "${bundle.dependencies.b.parameters.port}",
 	}
 	for name, value := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -146,11 +148,46 @@ func TestWireJobParameters_CompositeTemplateErrors(t *testing.T) {
 			jobIDs := buildJobIDs(order)
 
 			job := &storage.Job{}
-			err = wireJobParameters(job, v2.Dependency{Parameters: map[string]string{"env": value}}, tg.g, dep, jobIDs)
+			err = wireJobParameters(job, v2.Dependency{Parameters: map[string]string{"env": value}}, tg.g, dep, jobIDs, jobIDs[tg.g.Root])
 			require.Error(t, err)
 			assert.Empty(t, job.Installation.Parameters.Parameters)
 		})
 	}
+}
+
+func TestWireJobParameters_UsesParentJobNotRoot(t *testing.T) {
+	t.Parallel()
+
+	// root -> svc -> db: db's ${bundle.parameters.x} and
+	// ${bundle.credentials.y} are svc's (the bundle that declared db), not
+	// the root's.
+	tg := newTestGraph()
+	svc := tg.addNode("svc")
+	db := tg.addNode("db")
+	tg.addRequires(tg.g.Root, svc, "svc")
+	tg.addRequires(svc, db, "db")
+	order, err := tg.g.TopologicalOrder()
+	require.NoError(t, err)
+	jobIDs := buildJobIDs(order)
+
+	dep := v2.Dependency{
+		Parameters:  map[string]string{"p": "${bundle.parameters.x}", "t": "a-${bundle.parameters.x}"},
+		Credentials: map[string]string{"c": "${bundle.credentials.y}"},
+	}
+
+	job := &storage.Job{}
+	require.NoError(t, wireJobParameters(job, dep, tg.g, db, jobIDs, jobIDs[svc]))
+	require.NoError(t, wireJobCredentials(job, dep, tg.g, db, jobIDs, jobIDs[svc]))
+
+	byName := map[string]string{}
+	for _, p := range job.Installation.Parameters.Parameters {
+		byName[p.Name] = p.Source.Hint
+	}
+	assert.Equal(t, "workflow.jobs."+jobIDs[svc]+".parameters.x", byName["p"])
+	assert.Equal(t, "a-${workflow.jobs."+jobIDs[svc]+".parameters.x}", byName["t"])
+	require.Len(t, job.Credentials, 1)
+	assert.Equal(t, "workflow.jobs."+jobIDs[svc]+".credentials.y", job.Credentials[0].Source.Hint)
+	assert.NotContains(t, byName["p"], jobIDs[tg.g.Root])
 }
 
 func TestPropagateNamedSets(t *testing.T) {

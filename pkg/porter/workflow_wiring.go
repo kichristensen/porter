@@ -11,7 +11,7 @@ import (
 )
 
 // wiringStrategy is the secrets.Source.Strategy used for a value sourced
-// from another job (a sibling's not-yet-produced output, or the root job's
+// from another job (a sibling's not-yet-produced output, or the parent job's
 // parameter/credential). Resolving it (looking up
 // workflow.jobs.<jobID>.outputs|parameters|credentials.<name>, per
 // v2.DependencySource.AsWorkflowWiring) is a #2647 concern -- this package
@@ -43,9 +43,11 @@ func siblingJobIDs(g *Graph, key NodeKey, jobIDs map[NodeKey]string) map[string]
 // secrets.StrategyList:
 //   - a literal value becomes a plain value-strategy entry
 //     (storage.ValueStrategy); it's declared in the bundle, not a secret.
-//   - a reference to the root bundle's own parameter or credential becomes
-//     a wiringStrategy source pointing at the root job
-//     (workflow.jobs.<rootJob>.parameters|credentials.<name>). The value is
+//   - a reference to the parent bundle's own parameter or credential (the
+//     bundle that declared this dependency, which is the root only for a
+//     direct dependency; parentJobID is that bundle's job) becomes a
+//     wiringStrategy source pointing at the parent job
+//     (workflow.jobs.<parentJob>.parameters|credentials.<name>). The value is
 //     never resolved or stored here: Workflow is persisted, and its
 //     contract is that values are only resolved just-in-time.
 //   - a reference to a sibling dependency's output is skipped here; it's
@@ -58,7 +60,7 @@ func siblingJobIDs(g *Graph, key NodeKey, jobIDs map[NodeKey]string) map[string]
 // It also returns the names handled as composites, so wireFromEdges can
 // skip the edges those templates' sibling references created (the template
 // already carries them).
-func wireDependencyValues(values map[string]string, rootJobID string, siblings map[string]string) (secrets.StrategyList, map[string]bool, error) {
+func wireDependencyValues(values map[string]string, parentJobID string, siblings map[string]string) (secrets.StrategyList, map[string]bool, error) {
 	if len(values) == 0 {
 		return nil, nil, nil
 	}
@@ -80,7 +82,7 @@ func wireDependencyValues(values map[string]string, rootJobID string, siblings m
 		}
 
 		if len(refs) > 1 || (len(refs) == 1 && !isWholeReference(value, refs[0])) {
-			template, err := rewriteTemplate(value, rootJobID, siblings)
+			template, err := rewriteTemplate(value, parentJobID, siblings)
 			if err != nil {
 				return nil, nil, fmt.Errorf("cannot wire %q: %w", name, err)
 			}
@@ -99,12 +101,20 @@ func wireDependencyValues(values map[string]string, rootJobID string, siblings m
 
 		switch {
 		case src.Dependency != "":
-			// Sibling-dependency-output reference: handled by wireFromEdges.
+			// A sibling's output is handled by wireFromEdges. Anything else
+			// (no output, or an alias that isn't a sibling) can't be
+			// resolved by a job, so fail rather than silently dropping it.
+			if src.Output == "" {
+				return nil, nil, fmt.Errorf("cannot wire %q: unsupported reference %q", name, src.AsBundleWiring())
+			}
+			if _, ok := siblings[src.Dependency]; !ok {
+				return nil, nil, fmt.Errorf("cannot wire %q: references output %q of %q, which is not a sibling dependency", name, src.Output, src.Dependency)
+			}
 			continue
 		case src.Parameter != "" || src.Credential != "":
 			wired = append(wired, secrets.SourceMap{
 				Name:   name,
-				Source: secrets.Source{Strategy: wiringStrategy, Hint: src.AsWorkflowWiring(rootJobID)},
+				Source: secrets.Source{Strategy: wiringStrategy, Hint: src.AsWorkflowWiring(parentJobID)},
 			})
 		default:
 			wired = append(wired, storage.ValueStrategy(name, src.Value))
@@ -116,10 +126,10 @@ func wireDependencyValues(values map[string]string, rootJobID string, siblings m
 
 // rewriteTemplate rewrites every wiring reference in template to its
 // ${workflow.jobs.<jobID>...} form, leaving literal text as-is. Only a
-// sibling dependency's output or the root bundle's own parameter or
+// sibling dependency's output or the parent bundle's own parameter or
 // credential can be referenced; anything else can't be resolved by a job
 // and is an error.
-func rewriteTemplate(template string, rootJobID string, siblings map[string]string) (string, error) {
+func rewriteTemplate(template string, parentJobID string, siblings map[string]string) (string, error) {
 	return v2.ReplaceDependencySources(template, func(src v2.DependencySource) (string, error) {
 		switch {
 		case src.Dependency != "" && src.Output != "":
@@ -129,7 +139,7 @@ func rewriteTemplate(template string, rootJobID string, siblings map[string]stri
 			}
 			return "${" + src.AsWorkflowWiring(jobID) + "}", nil
 		case src.Dependency == "" && (src.Parameter != "" || src.Credential != ""):
-			return "${" + src.AsWorkflowWiring(rootJobID) + "}", nil
+			return "${" + src.AsWorkflowWiring(parentJobID) + "}", nil
 		default:
 			return "", fmt.Errorf("unsupported reference %q", src.AsBundleWiring())
 		}
@@ -170,11 +180,11 @@ func wireFromEdges(g *Graph, key NodeKey, jobIDs map[NodeKey]string, field strin
 }
 
 // wireJobParameters populates job.Installation.Parameters.Parameters from
-// dep's Parameters template map, combining literal/root-reference entries
+// dep's Parameters template map, combining literal/parent-reference entries
 // (wireDependencyValues) with sibling-output wiring entries
 // (wireFromEdges).
-func wireJobParameters(job *storage.Job, dep v2.Dependency, g *Graph, key NodeKey, jobIDs map[NodeKey]string) error {
-	wired, composites, err := wireDependencyValues(dep.Parameters, jobIDs[g.Root], siblingJobIDs(g, key, jobIDs))
+func wireJobParameters(job *storage.Job, dep v2.Dependency, g *Graph, key NodeKey, jobIDs map[NodeKey]string, parentJobID string) error {
+	wired, composites, err := wireDependencyValues(dep.Parameters, parentJobID, siblingJobIDs(g, key, jobIDs))
 	if err != nil {
 		return err
 	}
@@ -185,8 +195,8 @@ func wireJobParameters(job *storage.Job, dep v2.Dependency, g *Graph, key NodeKe
 
 // wireJobCredentials is wireJobParameters' counterpart for dep.Credentials,
 // populating job.Credentials instead of job.Installation.Parameters.
-func wireJobCredentials(job *storage.Job, dep v2.Dependency, g *Graph, key NodeKey, jobIDs map[NodeKey]string) error {
-	wired, composites, err := wireDependencyValues(dep.Credentials, jobIDs[g.Root], siblingJobIDs(g, key, jobIDs))
+func wireJobCredentials(job *storage.Job, dep v2.Dependency, g *Graph, key NodeKey, jobIDs map[NodeKey]string, parentJobID string) error {
+	wired, composites, err := wireDependencyValues(dep.Credentials, parentJobID, siblingJobIDs(g, key, jobIDs))
 	if err != nil {
 		return err
 	}
