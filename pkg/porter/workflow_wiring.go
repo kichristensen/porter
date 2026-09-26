@@ -179,6 +179,30 @@ func wireFromEdges(g *Graph, key NodeKey, jobIDs map[NodeKey]string, field strin
 	return wired
 }
 
+// mergeStrategies returns existing with wired applied on top: an entry with
+// the same name is replaced (wired is this workflow's current value, like
+// a parameter override on the command line), other entries are kept and
+// new ones added, sorted by name so comparisons stay stable. It builds a
+// new slice: existing can share its backing array with an installation the
+// graph reused, which must not be modified.
+func mergeStrategies(existing, wired secrets.StrategyList) secrets.StrategyList {
+	merged := append(secrets.StrategyList(nil), existing...)
+	for _, w := range wired {
+		replaced := false
+		for i := range merged {
+			if merged[i].Name == w.Name {
+				merged[i] = w
+				replaced = true
+			}
+		}
+		if !replaced {
+			merged = append(merged, w)
+		}
+	}
+	sort.Sort(merged)
+	return merged
+}
+
 // wireJobParameters populates job.Installation.Parameters.Parameters from
 // dep's Parameters template map, combining literal/parent-reference entries
 // (wireDependencyValues) with sibling-output wiring entries
@@ -188,8 +212,8 @@ func wireJobParameters(job *storage.Job, dep v2.Dependency, g *Graph, key NodeKe
 	if err != nil {
 		return err
 	}
-	job.Installation.Parameters.Parameters = append(job.Installation.Parameters.Parameters, wired...)
-	job.Installation.Parameters.Parameters = append(job.Installation.Parameters.Parameters, wireFromEdges(g, key, jobIDs, "parameters", composites)...)
+	wired = append(wired, wireFromEdges(g, key, jobIDs, "parameters", composites)...)
+	job.Installation.Parameters.Parameters = mergeStrategies(job.Installation.Parameters.Parameters, wired)
 	return nil
 }
 
@@ -200,8 +224,8 @@ func wireJobCredentials(job *storage.Job, dep v2.Dependency, g *Graph, key NodeK
 	if err != nil {
 		return err
 	}
-	job.Credentials = append(job.Credentials, wired...)
-	job.Credentials = append(job.Credentials, wireFromEdges(g, key, jobIDs, "credentials", composites)...)
+	wired = append(wired, wireFromEdges(g, key, jobIDs, "credentials", composites)...)
+	job.Credentials = mergeStrategies(job.Credentials, wired)
 	return nil
 }
 

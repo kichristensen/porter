@@ -190,6 +190,36 @@ func TestWireJobParameters_UsesParentJobNotRoot(t *testing.T) {
 	assert.NotContains(t, byName["p"], jobIDs[tg.g.Root])
 }
 
+func TestWireJobParameters_MergesByName(t *testing.T) {
+	t.Parallel()
+
+	tg := newTestGraph()
+	dep := tg.addNode("dep")
+	tg.addRequires(tg.g.Root, dep, "a")
+	order, err := tg.g.TopologicalOrder()
+	require.NoError(t, err)
+	jobIDs := buildJobIDs(order)
+
+	// A reused installation already carrying overrides, one for a name the
+	// mapping also wires.
+	original := secrets.StrategyList{storage.ValueStrategy("env", "stale"), storage.ValueStrategy("keep", "me")}
+	job := &storage.Job{}
+	job.Installation.Parameters.Parameters = original
+
+	d := v2.Dependency{Parameters: map[string]string{"env": "prod", "new": "x"}}
+	require.NoError(t, wireJobParameters(job, d, tg.g, dep, jobIDs, jobIDs[tg.g.Root]))
+
+	got := job.Installation.Parameters.Parameters
+	require.Len(t, got, 3, "no duplicate names")
+	assert.Equal(t, []string{"env", "keep", "new"}, []string{got[0].Name, got[1].Name, got[2].Name})
+	assert.Equal(t, "prod", got[0].Source.Hint, "wired value replaces the existing override")
+	assert.Equal(t, "me", got[1].Source.Hint)
+
+	// The list the job started with (shared with a reused installation)
+	// must be untouched.
+	assert.Equal(t, "stale", original[0].Source.Hint)
+}
+
 func TestPropagateNamedSets(t *testing.T) {
 	t.Parallel()
 
