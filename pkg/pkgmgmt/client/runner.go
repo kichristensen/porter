@@ -12,6 +12,7 @@ import (
 	"get.porter.sh/porter/pkg/pkgmgmt"
 	"get.porter.sh/porter/pkg/portercontext"
 	"get.porter.sh/porter/pkg/tracing"
+	"github.com/kballard/go-shellquote"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -94,7 +95,7 @@ func (r *Runner) Run(ctx context.Context, commandOpts pkgmgmt.CommandOptions) er
 		}()
 	}
 
-	prettyCmd := strings.Join(cmd.Args, " ")
+	prettyCmd := shellquote.Join(cmd.Args...)
 	span.SetAttributes(
 		attribute.String("command", prettyCmd),
 		attribute.String("dir", cmd.Dir),

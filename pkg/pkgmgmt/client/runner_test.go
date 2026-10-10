@@ -62,3 +62,12 @@ func TestRunner_Run_ErrorIncludesRunnableCommand(t *testing.T) {
 	assert.Contains(t, err.Error(), "package command failed "+os.Args[0]+" ", "expected the error to include a runnable command")
 	assert.NotContains(t, err.Error(), r.Getwd()+os.Args[0], "expected the command to not be prefixed with the working directory")
 }
+
+func TestRunner_Run_ErrorQuotesCommandArguments(t *testing.T) {
+	r := NewTestRunner(t, "mypackage", "mixins", true)
+	r.TestContext.Setenv(test.ExpectedCommandExitCodeEnv, "1")
+
+	err := r.Run(context.Background(), pkgmgmt.CommandOptions{Command: "install", File: "my file.yaml", Runtime: true})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "install -f 'my file.yaml'", "expected arguments with spaces to be quoted so that the command is runnable")
+}

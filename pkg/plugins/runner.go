@@ -9,6 +9,7 @@ import (
 	"get.porter.sh/porter/pkg/config"
 	"get.porter.sh/porter/pkg/portercontext"
 	"get.porter.sh/porter/pkg/tracing"
+	"github.com/kballard/go-shellquote"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -69,7 +70,7 @@ func (r *PluginRunner) Run(ctx context.Context, commandOpts CommandOptions) erro
 	cmd.Stdout = r.Out
 	cmd.Stderr = r.Err
 
-	prettyCmd := strings.Join(cmd.Args, " ")
+	prettyCmd := shellquote.Join(cmd.Args...)
 	span.SetAttributes(
 		attribute.String("full-command", prettyCmd),
 		attribute.String("dir", cmd.Dir),
