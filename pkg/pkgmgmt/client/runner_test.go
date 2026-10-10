@@ -7,8 +7,13 @@ import (
 
 	"get.porter.sh/porter/pkg/pkgmgmt"
 	"get.porter.sh/porter/pkg/test"
+	"get.porter.sh/porter/pkg/tracing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.uber.org/zap"
 )
 
 func TestRunner_Validate(t *testing.T) {
@@ -70,4 +75,31 @@ func TestRunner_Run_ErrorQuotesCommandArguments(t *testing.T) {
 	err := r.Run(context.Background(), pkgmgmt.CommandOptions{Command: "install", File: "my file.yaml", Runtime: true})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "install -f 'my file.yaml'", "expected arguments with spaces to be quoted so that the command is runnable")
+}
+
+func TestRunner_Run_TracesRunnableCommand(t *testing.T) {
+	// Record the spans created by the runner
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	tracer := tracing.NewTracer(provider.Tracer(t.Name()), nil)
+	ctx, rootSpan := tracer.Start(context.Background(), t.Name())
+	ctx, log := tracing.NewRootLogger(ctx, rootSpan, zap.NewNop(), tracer)
+
+	r := NewTestRunner(t, "mypackage", "mixins", true)
+	r.TestContext.Setenv(test.ExpectedCommandExitCodeEnv, "1")
+
+	err := r.Run(ctx, pkgmgmt.CommandOptions{Command: "install", File: "my file.yaml", Runtime: true})
+	require.Error(t, err)
+	log.EndSpan()
+
+	attrs := map[attribute.Key]string{}
+	for _, span := range recorder.Ended() {
+		for _, attr := range span.Attributes() {
+			attrs[attr.Key] = attr.Value.AsString()
+		}
+	}
+	// The test command is executed with the test binary
+	wantCmd := os.Args[0] + " /home/myuser/.porter/mixins/mypackage/runtimes/mypackage-runtime install -f 'my file.yaml'"
+	assert.Equal(t, wantCmd, attrs["command"], "expected the command attribute to be a runnable command")
+	assert.Equal(t, r.Getwd(), attrs["dir"], "expected the working directory to be recorded separately from the command")
 }
