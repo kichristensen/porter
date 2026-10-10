@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"get.porter.sh/porter/pkg/pkgmgmt"
@@ -49,4 +50,15 @@ func TestRunner_Run_CensorsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "couldn't run command fail open_door *******")
 	assert.NotContains(t, err.Error(), "topsecret", "expected the sensitive value to be masked in the error")
 	assert.NotContains(t, r.TestContext.GetError(), "topsecret", "expected the sensitive value to be masked in the output of the command")
+}
+
+func TestRunner_Run_ErrorIncludesRunnableCommand(t *testing.T) {
+	r := NewTestRunner(t, "mypackage", "mixins", true)
+	r.TestContext.Setenv(test.ExpectedCommandExitCodeEnv, "1")
+
+	err := r.Run(context.Background(), pkgmgmt.CommandOptions{Command: "install", Runtime: true})
+	require.Error(t, err)
+	// The test command is executed with the test binary
+	assert.Contains(t, err.Error(), "package command failed "+os.Args[0]+" ", "expected the error to include a runnable command")
+	assert.NotContains(t, err.Error(), r.Getwd()+os.Args[0], "expected the command to not be prefixed with the working directory")
 }
